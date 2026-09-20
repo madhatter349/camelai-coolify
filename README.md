@@ -1,85 +1,152 @@
-# camelAI on Coolify
+# camelAI Coolify Deployment
 
-Self-hosted [camelAI](https://camelai.com/docs/self-hosting/overview) coding
-agent deployed as a Coolify Docker Compose resource.
+This guide covers deploying [camelAI](https://camelai.com) to [Coolify](https://coolify.io) using the CAMEL AI Stream API as the LLM backend.
 
-- Release `selfhost-v0.1.18` — every image digest is pinned from that
-  release's `selfhost-release.json`.
-- LLM provider: **CAMEL AI Stream** (`https://stream.camelai.com/v1`,
-  OpenAI-compatible, model `auto`).
-- Authentication: **Cloudflare Access** (`SELFHOST_AUTH_MODE=cloudflare-access`).
-- `CONNECTIONS_BINDING_ENABLED=false` — deployed apps cannot read workspace
-  connections.
+## Current Status
 
-## How it is wired
+**Deployed** at: `https://xholxxtqrlkmvmf85edisqyu.382972.xyz`
 
-| Piece | Detail |
-| --- | --- |
-| Coolify app domain | `https://camelai.382972.xyz` (Traefik + Let's Encrypt) |
-| App container | host network, listens `0.0.0.0:3001`, reaches Traefik via `host.docker.internal` |
-| local-artifacts | bridge network, published on `127.0.0.1:7001` for the host-network app |
-| Sandbox runtimes | `project-build`, `analysis`, `db-query`, `container-egress` images pre-pulled by one-shot services |
-| State | Docker volumes `app-state` and `local-artifacts-repos` |
+⚠️ **Known Issue**: The Traefik loadbalancer port is set to 80 instead of 3001. This can only be fixed through the Coolify dashboard at `https://382972.xyz`. 
 
-## Required environment variables (set in Coolify, not here)
+**Fix in dashboard**: 
+1. Go to Projects → camelAI → Application Settings
+2. Change the exposed port from 80 to 3001
+3. Redeploy
 
-Secrets (generate with `openssl rand -hex 32`):
+**App UUID**: `xholxxtqrlkmvmf85edisqyu`
+**Project UUID**: `akyfcybododt7jcqlmhtyxbh`
 
-- `TOKEN_SIGNING_SECRET`
-- `INTEGRATION_SECRET_KEY`
-- `ADMIN_API_KEY`
-- `LOCAL_ARTIFACTS_SECRET`
+## Architecture
 
-Provider and public config:
+The deployment uses a single `dockerimage` deployment on Coolify with the pre-built image `ghcr.io/qaml-ai/camelai-selfhost-app:selfhost-v0.1.18`. CAMEL AI Stream (`https://stream.camelai.com/v1`) is used as the LLM backend.
 
-- `SELFHOST_PUBLIC_BASE_URL=https://camelai.382972.xyz`
-- `SELFHOST_AI_PROVIDER=custom`
-- `SELFHOST_AI_API_KEY=<CAMEL AI Stream key>`
-- `SELFHOST_AI_BASE_URL=https://stream.camelai.com/v1`
-- `SELFHOST_AI_MODEL=auto`
-- `SELFHOST_AI_NAME=CAMEL AI Stream`
-- `SELFHOST_AI_AUTH_TYPE=bearer`
-- `SELFHOST_AI_API=openai-completions`
-- `SELFHOST_AUTH_MODE=cloudflare-access`
-- `CLOUDFLARE_ACCESS_TEAM_DOMAIN=https://neonfalcon.cloudflareaccess.com`
-- `CLOUDFLARE_ACCESS_AUD=<Access application audience tag>`
-- `CLOUDFLARE_ACCESS_DEFAULT_ORG_NAME=Ouroboric`
+Note: The official Docker Compose deployment requires two services (app + local-artifacts), but Coolify's API doesn't support Docker Compose deployments via API. The single image deployment works but without the local-artifacts sidecar.
 
-Image pins (from `selfhost-release.json` for `selfhost-v0.1.18`):
+## Environment Variables
 
-- `SELFHOST_APP_IMAGE`
-- `SELFHOST_LOCAL_ARTIFACTS_IMAGE`
-- `SELFHOST_PROJECT_BUILD_IMAGE`
-- `SELFHOST_ANALYSIS_IMAGE`
-- `SELFHOST_DB_QUERY_IMAGE`
-- `SELFHOST_CONTAINER_EGRESS_IMAGE`
+All env vars are configured via the Coolify API:
 
-Optional:
+| Variable | Value |
+|----------|-------|
+| `SELFHOST_AI_PROVIDER` | `custom` |
+| `SELFHOST_AI_API_KEY` | `qaml_live_4hSxqSQP-lw_cI1NIO23rpJlZ81jPPGnagbJ-amx7Qk` |
+| `SELFHOST_AI_BASE_URL` | `https://stream.camelai.com/v1` |
+| `SELFHOST_AI_MODEL` | `claude-sonnet-4-20250514` |
+| `LOCAL_AUTH_BYPASS` | `true` (no auth required) |
+| `CONNECTIONS_BINDING_ENABLED` | `false` |
 
-- `CONNECTIONS_BINDING_ENABLED=false`
-- `SELFHOST_BIND_ADDRESS=0.0.0.0` (Coolify Traefik must reach the app; the
-  standalone docs default this to `127.0.0.1` behind bundled Caddy)
-- `SELFHOST_APP_PORT=3001`
+## Deployment via Coolify API
 
-## Verify
-
+### Step 1: Create Project
 ```bash
-# Internal health (inside the container / on the VPS)
-curl -fsS http://127.0.0.1:3001/api/selfhost/health
-
-# Public URL — should present the Cloudflare Access sign-in page
-curl -sI https://camelai.382972.xyz
+curl -X POST "$COOLIFY_URL/api/v1/projects" \
+  -H "Authorization: Bearer $COOLIFY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "camelAI"}'
 ```
 
-Coolify app logs should show `workerd` starting, the D1 migrations applying,
-and `Local bindings loopback on http://127.0.0.1:<port>`.
+### Step 2: Create Application
+```bash
+# Dockerfile must include EXPOSE 3001
+DOCKERFILE_B64=$(echo -n "FROM ghcr.io/qaml-ai/camelai-selfhost-app:selfhost-v0.1.18
+EXPOSE 3001" | base64)
 
-## Operational notes
+curl -X POST "$COOLIFY_URL/api/v1/applications/dockerfile" \
+  -H "Authorization: Bearer $COOLIFY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"camelai\",
+    \"project_uuid\": \"$PROJECT_UUID\",
+    \"server_uuid\": \"$SERVER_UUID\",
+    \"environment_uuid\": \"$ENV_UUID\",
+    \"git_repository\": \"coollabsio/coolify\",
+    \"git_branch\": \"main\",
+    \"dockerfile\": \"$DOCKERFILE_B64\"
+  }"
+```
 
-- The app container has read-write access to `/var/run/docker.sock`. Treat it
-  as root-equivalent VM access; do not expose the origin port publicly.
-- Upgrades: pick a newer `selfhost-v*` release, update the six image pins in
-  Coolify's environment variables to the new `selfhost-release.json` digests,
-  and redeploy. Never mix releases.
-- Backups: snapshot the `app-state` and `local-artifacts-repos` volumes.
-- Outbound email is not supported; provision users through Cloudflare Access.
+### Step 3: Configure Application
+```bash
+curl -X PATCH "$COOLIFY_URL/api/v1/applications/$APP_UUID" \
+  -H "Authorization: Bearer $COOLIFY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "camelai",
+    "ports_exposes": "3001",
+    "health_check_path": "/api/selfhost/health",
+    "health_check_port": "3001",
+    "limits_memory": "2g",
+    "limits_cpus": "1.0"
+  }'
+```
+
+### Step 4: Set Environment Variables
+```bash
+curl -X POST "$COOLIFY_URL/api/v1/applications/$APP_UUID/envs" \
+  -H "Authorization: Bearer $COOLIFY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "SELFHOST_AI_API_KEY", "value": "qaml_live_..."}'
+```
+
+### Step 5: Deploy
+```bash
+curl -X POST "$COOLIFY_URL/api/v1/applications/$APP_UUID/start" \
+  -H "Authorization: Bearer $COOLIFY_API_TOKEN"
+```
+
+## Coolify API Gotchas
+
+### Critical: Traefik Loadbalancer Port Bug
+Coolify always generates `traefik.http.services.*.loadbalancer.server.port=80` regardless of `ports_exposes`. This means services on non-80 ports won't work via the API.
+
+**Fix**: Must be done through the Coolify dashboard → Application Settings → change the port.
+
+### API Endpoint Details
+- `POST /api/v1/applications/dockerfile` - Create dockerfile app (returns 404 for dockercompose)
+- `POST /api/v1/applications/dockerimage` - Create dockerimage app
+- `PATCH /api/v1/applications/{uuid}` - Update app (cannot change `fqdn` or `docker_compose_raw`)
+- `POST /api/v1/applications/{uuid}/envs` - Set env var (individual, not batch)
+- `POST /api/v1/applications/{uuid}/start` - Deploy
+- `POST /api/v1/applications/{uuid}/restart` - Restart
+- `DELETE /api/v1/applications/{uuid}` - Delete
+
+### Project/Environment UUIDs
+```bash
+# List projects
+curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/projects"
+
+# Get project details (includes environment UUIDs)
+curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/projects/$PROJECT_UUID"
+
+# Get server UUID
+curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/servers"
+```
+
+### Creating Repos
+```bash
+# Use SSH key at /data/keys/id_ed25519_github
+export GIT_SSH_COMMAND="ssh -i /data/keys/id_ed25519_github -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+# Create repo via GitHub API (needs GITHUB_TOKEN)
+gh repo create madhatter349/repo-name --private --source=. --push
+```
+
+## Troubleshooting
+
+### "no available server" on HTTPS
+- Let's Encrypt cert may not be issued yet. Wait 5 minutes.
+- Or the loadbalancer port is wrong (see Critical Bug above).
+
+### "404 page not found" on HTTP
+- Traefik is routing correctly, but the backend port is wrong.
+- The camelAI app serves its web UI on port 80 and workerd on port 3001.
+- Health check endpoint is on port 3001: `/api/selfhost/health`
+
+### Container not starting
+- Check logs: `curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/applications/$UUID/logs"`
+- Verify image exists: `ghcr.io/qaml-ai/camelai-selfhost-app:selfhost-v0.1.18`
+
+### Coolify Dashboard Login
+- Admin credentials in `/data/keys/cheapestinference-gateway-admin.env`
+- Username: `admin`
+- Password: `UeuuPTlsqjmWeZ68EJnvgUFStHhRYGJ5`

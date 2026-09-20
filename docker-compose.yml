@@ -5,14 +5,32 @@
 #
 # Networking: camelAI's app service uses the Linux host network because workerd's
 # localDocker sidecars communicate over loopback. SELFHOST_BIND_ADDRESS=0.0.0.0
-# lets Coolify's Traefik reach the app through host.docker.internal while the
-# app keeps talking to local-artifacts on 127.0.0.1:7001.
+# lets a bridge shim reach the app through host.docker.internal while the app
+# keeps talking to local-artifacts on 127.0.0.1:7001.
+#
+# The `web` service is a tiny TCP shim on the project bridge network. Coolify's
+# Traefik proxies the public domain to `web:8080`; socat forwards to the
+# host-networked app on 3001. (Traefik's docker provider does not build a route
+# for a compose service that uses network_mode: host.)
 #
 # Auth: Cloudflare Access (SELFHOST_AUTH_MODE=cloudflare-access) protects the
 # control plane at the edge and camelAI validates the Access JWT itself, so a
 # direct hit on the origin port is still rejected.
 
 services:
+  # Bridge-network ingress for Traefik. The public domain is attached here.
+  web:
+    image: alpine/socat:1.8.0.0
+    restart: unless-stopped
+    command: ["TCP-LISTEN:8080,fork,reuseaddr", "TCP:host.docker.internal:3001"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8080"
+    depends_on:
+      app:
+        condition: service_healthy
+
   app:
     image: ${SELFHOST_APP_IMAGE:?Set SELFHOST_APP_IMAGE from selfhost-release.json}
     restart: unless-stopped
@@ -60,9 +78,6 @@ services:
       SELFHOST_ANALYSIS_IMAGE: ${SELFHOST_ANALYSIS_IMAGE:?Set from selfhost-release.json}
       SELFHOST_DB_QUERY_IMAGE: ${SELFHOST_DB_QUERY_IMAGE:?Set from selfhost-release.json}
       SELFHOST_CONTAINER_EGRESS_IMAGE: ${SELFHOST_CONTAINER_EGRESS_IMAGE:?Set from selfhost-release.json}
-    # Coolify reads expose/ports to learn which container port the proxy targets.
-    expose:
-      - "3001"
     volumes:
       - app-state:/workspace/.selfhost/workerd/state
       # workerd starts attached containers; control of this container is
