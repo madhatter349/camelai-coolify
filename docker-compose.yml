@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  app:
+    image: ghcr.io/qaml-ai/camelai-selfhost-app:selfhost-v0.1.18@sha256:9187df1a59de69b480bde6264dce0a8202180900db6167b421e5b3c031254d93
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TOKEN_SIGNING_SECRET: ${TOKEN_SIGNING_SECRET}
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      CONNECTIONS_BINDING_ENABLED: "false"
+      WORKER_BASE_URL: ${SELFHOST_PUBLIC_BASE_URL}
+      LOCAL_ARTIFACTS_BASE_URL: http://local-artifacts:7001
+      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET}
+      CF_ACCOUNT_ID: selfhost
+      CF_DISPATCH_NAMESPACE: selfhost
+      CF_WORKER_NAME: chiridion-selfhost
+      AI_VIRTUAL_MODEL: dynamic/auto
+      SELFHOST_AI_PROVIDER: custom
+      SELFHOST_AI_API_KEY: ${SELFHOST_AI_API_KEY}
+      SELFHOST_AI_BASE_URL: https://stream.camelai.com/v1
+      SELFHOST_AI_MODEL: ${SELFHOST_AI_MODEL:-claude-sonnet-4-20250514}
+      SELFHOST_AI_NAME: CAMEL AI Stream
+      SELFHOST_AI_AUTH_TYPE: bearer
+      SELFHOST_AI_API: openai-completions
+      SELFHOST_AI_AWS_REGION: us-east-1
+      SELFHOST_AGENT_DIR: .selfhost/agent
+      LOCAL_AUTH_BYPASS: "true"
+      LOCAL_AUTH_BYPASS_HOSTS: "*"
+      LOCAL_AUTH_USER_EMAIL: admin@example.com
+      LOCAL_AUTH_USER_NAME: Admin
+      SELFHOST_WORKERD_SOCKET: "0.0.0.0:3001"
+      EMAIL_FROM_ADDRESS: no-reply@localhost
+      WORKSPACE_EMAIL_DOMAIN: localhost
+      SELFHOST_BROWSER_NO_SANDBOX: "1"
+      SELFHOST_DOCKER_SOCKET_URI: unix:///var/run/docker.sock
+      SELFHOST_PROJECT_BUILD_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-project-build:selfhost-v0.1.18@sha256:6b3cf42eaab48cbd63aa96101849a77768d26eba6eca864463d62bc15979d6f5
+      SELFHOST_ANALYSIS_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-analysis:selfhost-v0.1.18@sha256:8888650c42f68b1a1c8ccdc2f49012bd50a8d713be1ed2af57c331dc6b4eb617
+      SELFHOST_DB_QUERY_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-db-query:selfhost-v0.1.18@sha256:f25898fb664be4b8932bf03d890b17bde146e57939f69b8a94e6cd680b5c8f94
+      SELFHOST_CONTAINER_EGRESS_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-container-egress:selfhost-v0.1.18@sha256:9196855d7b02eac8dfdba7ba332b665b396d9169cd68309490c6b39ec3ad24db
+    ports:
+      - "3001:3001"
+    volumes:
+      - app-state:/workspace/.selfhost/workerd/state
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    depends_on:
+      local-artifacts:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/selfhost/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  local-artifacts:
+    image: ghcr.io/qaml-ai/camelai-selfhost-local-artifacts:selfhost-v0.1.18@sha256:ceaf4b79ece83c4bcdca77bd8500250624516dc40b2cd0b15d37cf377bfa1c1b
+    restart: unless-stopped
+    environment:
+      LOCAL_ARTIFACTS_PORT: "7001"
+      LOCAL_ARTIFACTS_REPO_ROOT: /data/repos
+      LOCAL_ARTIFACTS_PUBLIC_BASE_URL: http://local-artifacts:7001
+      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET}
+    ports:
+      - "7001:7001"
+    volumes:
+      - local-artifacts-repos:/data/repos
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  app-state:
+  local-artifacts-repos:
