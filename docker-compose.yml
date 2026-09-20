@@ -1,75 +1,140 @@
-version: '3.8'
+# camelAI self-hosted coding agent — Coolify deployment
+#
+# Release: selfhost-v0.1.18. All image digests come from that release's
+# selfhost-release.json manifest. Do not mix images from different releases.
+#
+# Networking: camelAI's app service uses the Linux host network because workerd's
+# localDocker sidecars communicate over loopback. SELFHOST_BIND_ADDRESS=0.0.0.0
+# lets Coolify's Traefik reach the app through host.docker.internal while the
+# app keeps talking to local-artifacts on 127.0.0.1:7001.
+#
+# Auth: Cloudflare Access (SELFHOST_AUTH_MODE=cloudflare-access) protects the
+# control plane at the edge and camelAI validates the Access JWT itself, so a
+# direct hit on the origin port is still rejected.
 
 services:
   app:
-    image: ghcr.io/qaml-ai/camelai-selfhost-app:selfhost-v0.1.18@sha256:9187df1a59de69b480bde6264dce0a8202180900db6167b421e5b3c031254d93
+    image: ${SELFHOST_APP_IMAGE:?Set SELFHOST_APP_IMAGE from selfhost-release.json}
     restart: unless-stopped
+    # Required by workerd localDocker sidecars (see camelAI self-hosting docs).
+    network_mode: host
     environment:
       NODE_ENV: production
-      TOKEN_SIGNING_SECRET: ${TOKEN_SIGNING_SECRET}
-      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY}
-      ADMIN_API_KEY: ${ADMIN_API_KEY}
-      CONNECTIONS_BINDING_ENABLED: "false"
-      WORKER_BASE_URL: ${SELFHOST_PUBLIC_BASE_URL}
-      LOCAL_ARTIFACTS_BASE_URL: http://local-artifacts:7001
-      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET}
+      TOKEN_SIGNING_SECRET: ${TOKEN_SIGNING_SECRET:?Run openssl rand -hex 32}
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:?Run openssl rand -hex 32}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Run openssl rand -hex 32}
+      CONNECTIONS_BINDING_ENABLED: ${CONNECTIONS_BINDING_ENABLED:-false}
+      WORKER_BASE_URL: ${SELFHOST_PUBLIC_BASE_URL:?Set the public https URL}
+      # local-artifacts is published on host loopback; the app uses host networking.
+      LOCAL_ARTIFACTS_BASE_URL: http://127.0.0.1:7001
+      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET:?Run openssl rand -hex 32}
       CF_ACCOUNT_ID: selfhost
       CF_DISPATCH_NAMESPACE: selfhost
       CF_WORKER_NAME: chiridion-selfhost
       AI_VIRTUAL_MODEL: dynamic/auto
-      SELFHOST_AI_PROVIDER: custom
-      SELFHOST_AI_API_KEY: ${SELFHOST_AI_API_KEY}
-      SELFHOST_AI_BASE_URL: https://stream.camelai.com/v1
-      SELFHOST_AI_MODEL: ${SELFHOST_AI_MODEL:-claude-sonnet-4-20250514}
-      SELFHOST_AI_NAME: CAMEL AI Stream
-      SELFHOST_AI_AUTH_TYPE: bearer
-      SELFHOST_AI_API: openai-completions
-      SELFHOST_AI_AWS_REGION: us-east-1
-      SELFHOST_AGENT_DIR: .selfhost/agent
-      LOCAL_AUTH_BYPASS: "true"
-      LOCAL_AUTH_BYPASS_HOSTS: "*"
-      LOCAL_AUTH_USER_EMAIL: admin@example.com
-      LOCAL_AUTH_USER_NAME: Admin
-      SELFHOST_WORKERD_SOCKET: "0.0.0.0:3001"
+      # AI provider — CAMEL AI Stream (OpenAI-compatible gateway).
+      SELFHOST_AI_PROVIDER: ${SELFHOST_AI_PROVIDER:-custom}
+      SELFHOST_AI_API_KEY: ${SELFHOST_AI_API_KEY:?Set the AI provider API key}
+      SELFHOST_AI_BASE_URL: ${SELFHOST_AI_BASE_URL:-https://stream.camelai.com/v1}
+      SELFHOST_AI_MODEL: ${SELFHOST_AI_MODEL:-auto}
+      SELFHOST_AI_NAME: ${SELFHOST_AI_NAME:-CAMEL AI Stream}
+      SELFHOST_AI_AUTH_TYPE: ${SELFHOST_AI_AUTH_TYPE:-bearer}
+      SELFHOST_AI_API: ${SELFHOST_AI_API:-openai-completions}
+      SELFHOST_AI_AWS_REGION: ${SELFHOST_AI_AWS_REGION:-us-east-1}
+      # Auth mode: cloudflare-access | bundled-pomerium | external-pomerium
+      SELFHOST_AUTH_MODE: ${SELFHOST_AUTH_MODE:-cloudflare-access}
+      CLOUDFLARE_ACCESS_TEAM_DOMAIN: ${CLOUDFLARE_ACCESS_TEAM_DOMAIN:-}
+      CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+      CLOUDFLARE_ACCESS_DEFAULT_ORG_NAME: ${CLOUDFLARE_ACCESS_DEFAULT_ORG_NAME:-}
+      # Only for loopback smoke tests; never enable on a shared VM.
+      LOCAL_AUTH_BYPASS: ${LOCAL_AUTH_BYPASS:-}
+      LOCAL_AUTH_BYPASS_HOSTS: ${LOCAL_AUTH_BYPASS_HOSTS:-}
+      LOCAL_AUTH_USER_EMAIL: ${LOCAL_AUTH_USER_EMAIL:-}
+      LOCAL_AUTH_USER_NAME: ${LOCAL_AUTH_USER_NAME:-}
+      SELFHOST_WORKERD_SOCKET: ${SELFHOST_BIND_ADDRESS:-0.0.0.0}:${SELFHOST_APP_PORT:-3001}
       EMAIL_FROM_ADDRESS: no-reply@localhost
       WORKSPACE_EMAIL_DOMAIN: localhost
       SELFHOST_BROWSER_NO_SANDBOX: "1"
       SELFHOST_DOCKER_SOCKET_URI: unix:///var/run/docker.sock
-      SELFHOST_PROJECT_BUILD_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-project-build:selfhost-v0.1.18@sha256:6b3cf42eaab48cbd63aa96101849a77768d26eba6eca864463d62bc15979d6f5
-      SELFHOST_ANALYSIS_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-analysis:selfhost-v0.1.18@sha256:8888650c42f68b1a1c8ccdc2f49012bd50a8d713be1ed2af57c331dc6b4eb617
-      SELFHOST_DB_QUERY_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-db-query:selfhost-v0.1.18@sha256:f25898fb664be4b8932bf03d890b17bde146e57939f69b8a94e6cd680b5c8f94
-      SELFHOST_CONTAINER_EGRESS_IMAGE: ghcr.io/qaml-ai/camelai-selfhost-container-egress:selfhost-v0.1.18@sha256:9196855d7b02eac8dfdba7ba332b665b396d9169cd68309490c6b39ec3ad24db
-    ports:
-      - "3001:3001"
+      SELFHOST_PROJECT_BUILD_IMAGE: ${SELFHOST_PROJECT_BUILD_IMAGE:?Set from selfhost-release.json}
+      SELFHOST_ANALYSIS_IMAGE: ${SELFHOST_ANALYSIS_IMAGE:?Set from selfhost-release.json}
+      SELFHOST_DB_QUERY_IMAGE: ${SELFHOST_DB_QUERY_IMAGE:?Set from selfhost-release.json}
+      SELFHOST_CONTAINER_EGRESS_IMAGE: ${SELFHOST_CONTAINER_EGRESS_IMAGE:?Set from selfhost-release.json}
+    # Coolify reads expose/ports to learn which container port the proxy targets.
+    expose:
+      - "3001"
     volumes:
       - app-state:/workspace/.selfhost/workerd/state
+      # workerd starts attached containers; control of this container is
+      # root-equivalent access to the VM. Keep the host firewalled.
       - /var/run/docker.sock:/var/run/docker.sock:rw
     depends_on:
       local-artifacts:
         condition: service_healthy
+      project-build-image:
+        condition: service_completed_successfully
+      analysis-image:
+        condition: service_completed_successfully
+      db-query-image:
+        condition: service_completed_successfully
+      container-egress-image:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/selfhost/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/api/selfhost/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 30
+      start_period: 60s
 
+  # Local git-backed project storage. Bound to host loopback because the app
+  # service runs in the host network namespace.
   local-artifacts:
-    image: ghcr.io/qaml-ai/camelai-selfhost-local-artifacts:selfhost-v0.1.18@sha256:ceaf4b79ece83c4bcdca77bd8500250624516dc40b2cd0b15d37cf377bfa1c1b
+    image: ${SELFHOST_LOCAL_ARTIFACTS_IMAGE:?Set from selfhost-release.json}
     restart: unless-stopped
     environment:
       LOCAL_ARTIFACTS_PORT: "7001"
       LOCAL_ARTIFACTS_REPO_ROOT: /data/repos
-      LOCAL_ARTIFACTS_PUBLIC_BASE_URL: http://local-artifacts:7001
-      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET}
+      LOCAL_ARTIFACTS_PUBLIC_BASE_URL: http://127.0.0.1:7001
+      LOCAL_ARTIFACTS_SECRET: ${LOCAL_ARTIFACTS_SECRET:?Run openssl rand -hex 32}
     ports:
-      - "7001:7001"
+      - "127.0.0.1:7001:7001"
     volumes:
       - local-artifacts-repos:/data/repos
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:7001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # One-shot services that make the exact sandbox image names referenced by
+  # workerd available in the VM's Docker daemon before the app starts.
+  project-build-image:
+    image: ${SELFHOST_PROJECT_BUILD_IMAGE:?Set from selfhost-release.json}
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  analysis-image:
+    image: ${SELFHOST_ANALYSIS_IMAGE:?Set from selfhost-release.json}
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  db-query-image:
+    image: ${SELFHOST_DB_QUERY_IMAGE:?Set from selfhost-release.json}
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  container-egress-image:
+    image: ${SELFHOST_CONTAINER_EGRESS_IMAGE:?Set from selfhost-release.json}
+    entrypoint: ["/bin/true"]
+    restart: "no"
 
 volumes:
   app-state:

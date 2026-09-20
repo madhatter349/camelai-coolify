@@ -1,0 +1,4 @@
+.env
+.env.*
+deploy.local.env
+.selfhost/
