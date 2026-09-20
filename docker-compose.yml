@@ -29,7 +29,7 @@ services:
       - "8080"
     depends_on:
       app:
-        condition: service_healthy
+        condition: service_started
 
   app:
     image: ${SELFHOST_APP_IMAGE:?Set SELFHOST_APP_IMAGE from selfhost-release.json}
